@@ -1,0 +1,5 @@
+# Ephemeral execution state
+lanes/*
+!lanes/.gitkeep
+control/*
+!control/.gitkeep

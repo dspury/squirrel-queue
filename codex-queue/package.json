@@ -1,0 +1,32 @@
+{
+  "name": "codex-queue",
+  "version": "0.1.0",
+  "description": "A lightweight dispatcher for Codex CLI tasks across local, cloud, and deferred execution modes.",
+  "license": "MIT",
+  "type": "commonjs",
+  "private": false,
+  "files": [
+    "bin/",
+    "docs/",
+    "examples/",
+    "index.js",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "codex",
+    "queue",
+    "cli",
+    "automation",
+    "agent"
+  ],
+  "bin": {
+    "codex-queue": "./bin/codex-queue.js"
+  },
+  "scripts": {
+    "check": "node test/checks.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

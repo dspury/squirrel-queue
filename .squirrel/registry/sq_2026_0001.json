@@ -1,0 +1,15 @@
+{
+  "task_id": "sq_2026_0001",
+  "title": "Objective:",
+  "objective": "Objective:\nCreate a playable terminal-based arcade shooter inspired by Galaga.\n\nProject structure:\n- `terminal_galaga/`\n  - `main.py`\n  - `game.py`\n  - `state.json`\n  - `README.md`\n\nRequirements:\n\n1. Core gameplay\n- The player ship is positioned on the bottom row.\n- The player can move `left` and `right`.\n- The player can `shoot`.\n- Enemies begin near the top of the screen and move horizontally as a formation.\n- When enemies hit a screen edge, the formation drops down by one row and reverses direction.\n- Enemies can optionally fire downward projectiles.\n- Player wins when all enemies are destroyed.\n- Player loses if:\n  - an enemy reaches the player row, or\n  - the player is hit by an enemy projectile.\n\n2. Screen / rendering\n- Render the game in ASCII in the terminal.\n- Grid size must be exactly 12 columns x 12 rows.\n- Symbols:\n  - `A` = player\n  - `M` = enemy\n  - `|` = player projectile\n  - `!` = enemy projectile\n  - `.` = empty cell\n- Every rendered frame must print exactly 12 rows of 12 characters each.\n\n3. Controls\n- Support these commands:\n  - `left`\n  - `right`\n  - `shoot`\n  - `tick`\n- `tick` advances the game by one step.\n- Game must be turn-based, not time-based. No realtime input loop.\n\n4. State\n- Persist game state in `state.json`\n- State must include at minimum:\n  - player position\n  - enemy positions\n  - projectile positions\n  - current enemy movement direction\n  - score\n  - status (`ongoing`, `won`, `lost`)\n\n5. Constraints\n- Python standard library only\n- Run with `python main.py <command>`\n- No external dependencies\n- No curses\n- No hidden state outside `state.json`\n\nAcceptance Criteria:\n\nFilesystem:\n- `terminal_galaga/` exists\n- `main.py`, `game.py`, `state.json`, `README.md` all exist\n\nRendering:\n- Running `python main.py tick` prints exactly 12 rows\n- Each row is exactly 12 characters\n- Output uses only the allowed symbols\n\nBehavior:\n- Player cannot move outside bounds\n- `shoot` creates at most one new player projectile per command\n- Player projectile moves upward on `tick`\n- Enemy formation moves horizontally until edge, then drops and reverses\n- Projectile/enemy collisions remove the enemy and increase score\n- If all enemies are removed, status becomes `won`\n- If an enemy reaches player row or player is hit, status becomes `lost`\n\nState validation:\n- `state.json` must be valid JSON\n- Required keys must exist\n- Printed output must correspond to positions stored in `state.json`\n\nREADME:\n- Must explain setup, commands, symbols, win/loss conditions\n\nFailure Conditions:\n- Missing files\n- Invalid JSON\n- Wrong grid dimensions\n- State and rendered frame do not match\n- Illegal movement outside bounds\n- Any acceptance criterion cannot be verified programmatically",
+  "priority": "normal",
+  "owner": "user",
+  "source": "vos",
+  "created_at": "2026-03-18T03:03:27.427178+00:00",
+  "status": "failed",
+  "constraints": [],
+  "success_criteria": [
+    "Objective completed as described"
+  ],
+  "context_files": []
+}

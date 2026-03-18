@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "squirrel/state_machine",
+  "title": "Squirrel Task State Machine",
+  "description": "Defines all valid task states and legal transitions. No transition not listed here is permitted.",
+  "states": [
+    "queued",
+    "active",
+    "blocked",
+    "validating",
+    "complete",
+    "failed"
+  ],
+  "transitions": [
+    {
+      "from": "queued",
+      "to": "active",
+      "trigger": "lane_pickup",
+      "description": "Execution lane picks up the task from the queue."
+    },
+    {
+      "from": "active",
+      "to": "validating",
+      "trigger": "execution_complete",
+      "description": "Lane finishes work, outputs are ready for validation."
+    },
+    {
+      "from": "active",
+      "to": "blocked",
+      "trigger": "dependency_missing",
+      "description": "Execution cannot continue due to missing dependency or external constraint."
+    },
+    {
+      "from": "active",
+      "to": "failed",
+      "trigger": "execution_error",
+      "description": "Unrecoverable error during execution. Max retries exhausted."
+    },
+    {
+      "from": "blocked",
+      "to": "queued",
+      "trigger": "blocker_resolved",
+      "description": "Blocking condition cleared. Task re-enters the queue."
+    },
+    {
+      "from": "validating",
+      "to": "complete",
+      "trigger": "validation_pass",
+      "description": "All success_criteria met. Receipt is produced."
+    },
+    {
+      "from": "validating",
+      "to": "failed",
+      "trigger": "validation_fail",
+      "description": "Success criteria not met. Receipt records failure."
+    },
+    {
+      "from": "failed",
+      "to": "queued",
+      "trigger": "manual_retry",
+      "description": "User or OpenClaw re-enqueues a failed task for another attempt."
+    }
+  ],
+  "rules": {
+    "no_implicit_completion": "A task cannot move to 'complete' without passing through 'validating'.",
+    "no_skipping_states": "Every transition must follow a defined path. No direct jumps.",
+    "receipts_required": "A task in 'complete' or 'failed' state must have a corresponding receipt in outbox/.",
+    "max_retries": 3
+  }
+}

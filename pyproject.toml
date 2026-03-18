@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "squirrel"
+version = "1.0.0"
+description = "Squirrel v1 — deterministic task execution pipeline"
+requires-python = ">=3.11"
+dependencies = ["jsonschema"]
+
+[project.scripts]
+squirrel = "squirrel.cli:main"

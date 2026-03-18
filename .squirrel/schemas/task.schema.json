@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "squirrel/task",
+  "title": "Squirrel Task",
+  "description": "Normalized task object for Squirrel intake. Submitted by vOS or OpenClaw into .squirrel/inbox/.",
+  "type": "object",
+  "required": [
+    "task_id",
+    "title",
+    "objective",
+    "priority",
+    "status",
+    "created_at",
+    "success_criteria"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^sq_\\d{4}_\\d{4}$",
+      "description": "Unique task identifier. Format: sq_YYYY_NNNN"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "Short imperative description of the task."
+    },
+    "objective": {
+      "type": "string",
+      "description": "One-sentence statement of what must be accomplished."
+    },
+    "priority": {
+      "enum": ["critical", "high", "normal", "low"],
+      "description": "Execution priority. Determines queue ordering."
+    },
+    "owner": {
+      "type": "string",
+      "default": "user",
+      "description": "Who submitted the task. 'user' for vOS, 'openclaw' for scheduled tasks."
+    },
+    "source": {
+      "enum": ["vos", "openclaw", "manual"],
+      "default": "manual",
+      "description": "Origin of the task submission."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of task creation."
+    },
+    "status": {
+      "const": "queued",
+      "description": "Intake status is always 'queued'. Squirrel manages transitions after intake."
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "What the execution lane must NOT do."
+    },
+    "success_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Binary conditions that must be true for the task to pass validation."
+    },
+    "context_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Exact file paths the execution lane needs. No globs."
+    }
+  },
+  "additionalProperties": false
+}

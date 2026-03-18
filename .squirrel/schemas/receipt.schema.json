@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "squirrel/receipt",
+  "title": "Squirrel Receipt",
+  "description": "Standard output proving what happened during task execution. Written to .squirrel/outbox/.",
+  "type": "object",
+  "required": [
+    "task_id",
+    "status",
+    "validation_result",
+    "started_at",
+    "completed_at"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "References the originating task."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable task title for summary output."
+    },
+    "lane_id": {
+      "type": "string",
+      "description": "Identifier of the execution lane that performed the work."
+    },
+    "status": {
+      "enum": ["complete", "failed", "blocked"],
+      "description": "Final outcome of the task execution."
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "File paths of produced deliverables."
+    },
+    "actions_taken": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Ordered list of what the lane actually did."
+    },
+    "validation_result": {
+      "enum": ["pass", "fail"],
+      "description": "Binary outcome of checking success_criteria."
+    },
+    "validation_notes": {
+      "type": "string",
+      "default": "",
+      "description": "Brief explanation of validation outcome."
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Any errors encountered during execution."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of execution start."
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of execution end."
+    }
+  },
+  "additionalProperties": false
+}

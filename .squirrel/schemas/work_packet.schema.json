@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "squirrel/work_packet",
+  "title": "Squirrel Work Packet",
+  "description": "Bounded unit of work dispatched to an execution lane. Produced by decomposition of a task.",
+  "type": "object",
+  "required": [
+    "packet_id",
+    "task_id",
+    "objective",
+    "lane_id",
+    "role",
+    "status"
+  ],
+  "properties": {
+    "packet_id": {
+      "type": "string",
+      "pattern": "^wp_\\d{4}_\\d{4}_\\d{2}$",
+      "description": "Unique packet identifier. Format: wp_YYYY_NNNN_SS (SS = step number)"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Parent task this packet belongs to."
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Execution order within the parent task decomposition."
+    },
+    "role": {
+      "enum": ["builder", "researcher", "reviewer", "operator"],
+      "description": "Sub-agent role assigned to this packet. Determines allowed work."
+    },
+    "objective": {
+      "type": "string",
+      "description": "Single bounded action for this packet."
+    },
+    "lane_id": {
+      "type": "string",
+      "description": "Assigned execution lane."
+    },
+    "lane_hint": {
+      "type": "string",
+      "default": "",
+      "description": "Preferred lane for dispatch. Commander may override."
+    },
+    "inputs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Input artifacts or data this packet consumes."
+    },
+    "context_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Files this packet needs. Subset of parent task context."
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Packet-level constraints inherited or narrowed from parent task."
+    },
+    "expected_artifact": {
+      "type": "string",
+      "default": "",
+      "description": "What this packet should produce."
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Packet IDs that must complete before this packet can run."
+    },
+    "priority": {
+      "enum": ["critical", "high", "normal", "low"],
+      "default": "normal",
+      "description": "Packet priority, inherited from parent task."
+    },
+    "success_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Criteria this packet must satisfy."
+    },
+    "status": {
+      "enum": ["queued", "active", "complete", "failed"],
+      "description": "Current packet state."
+    }
+  },
+  "additionalProperties": false
+}
