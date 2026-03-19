@@ -429,7 +429,13 @@ async function executePreparedDispatchPlan(dispatchPlan, request, requestId, run
       };
     }
   }
-  return executeDispatchPlan(dispatchPlan, runner);
+  // Pass request metadata for tmux window naming
+  const meta = {
+    agent: request.agent || dispatchPlan.agent,
+    dedupe_key: request.dedupe_key || '',
+    task_type: request.task_type || '',
+  };
+  return executeDispatchPlan(dispatchPlan, runner, meta);
 }
 
 async function writeDeferredRequestFile(dispatchPlan, request, requestId) {
@@ -450,8 +456,8 @@ async function writeDeferredRequestFile(dispatchPlan, request, requestId) {
   return dispatchPlan.deferred_request_path;
 }
 
-async function executeDispatchPlan(dispatchPlan, runner = runCommand) {
-  const result = await runner(dispatchPlan.command, dispatchPlan.timeout_ms || 0, dispatchPlan.cwd);
+async function executeDispatchPlan(dispatchPlan, runner = runCommand, meta = {}) {
+  const result = await runner(dispatchPlan.command, dispatchPlan.timeout_ms || 0, dispatchPlan.cwd, meta);
   let assistantPreview = null;
 
   if (dispatchPlan.output_path) {
@@ -573,7 +579,7 @@ async function ensureTmuxSession() {
   });
 }
 
-async function runCommandTmux(command, timeoutMs = 0, cwd = undefined) {
+async function runCommandTmux(command, timeoutMs = 0, cwd = undefined, meta = {}) {
   const id = crypto.randomUUID().slice(0, 8);
   const outFile = path.join(os.tmpdir(), `sq-tmux-${id}.out`);
   const exitFile = path.join(os.tmpdir(), `sq-tmux-${id}.exit`);
@@ -581,22 +587,35 @@ async function runCommandTmux(command, timeoutMs = 0, cwd = undefined) {
 
   const escaped = command.map(shellQuote).join(' ');
 
+  // Build a descriptive window name from metadata when available.
+  // Format: "agent:lane_01:sq_2026_0001" instead of "lane-<uuid>"
+  const windowName = buildTmuxWindowName(meta, id);
+
   // Wrapper: run command with output visible in pane AND captured to file.
   // pipefail ensures the agent's exit code propagates through tee.
   const script = [
     '#!/bin/bash',
     'set -o pipefail',
     ...(cwd ? [`cd ${shellQuote(cwd)}`] : []),
+    `echo "--- Squirrel Lane: ${windowName} ---"`,
+    `echo "Started: $(date -u +%H:%M:%S)"`,
+    `echo ""`,
     `${escaped} 2>&1 | tee ${shellQuote(outFile)}`,
     `echo $? > ${shellQuote(exitFile)}`,
-    'sleep 2',
+    `echo ""`,
+    `echo "--- Completed: $(date -u +%H:%M:%S) ---"`,
+    // Keep the pane open so the operator can scroll back through output.
+    // Without this, the pane closes immediately on completion.
+    'echo "Press Enter to close this pane."',
+    'read -r',
     '',
   ].join('\n');
 
   await fs.writeFile(scriptFile, script, { mode: 0o755 });
   await ensureTmuxSession();
 
-  const windowName = `lane-${id}`;
+  // Set remain-on-exit so the pane persists even if the script exits
+  // before the operator presses Enter (e.g. on crash).
   await new Promise((resolve, reject) => {
     const child = spawn('tmux', [
       'new-window', '-t', TMUX_SESSION, '-n', windowName, 'bash', scriptFile,
@@ -608,9 +627,15 @@ async function runCommandTmux(command, timeoutMs = 0, cwd = undefined) {
     child.on('error', reject);
   });
 
-  // Poll for completion
+  // Enable remain-on-exit for this window so output is preserved on crash
+  spawn('tmux', [
+    'set-option', '-t', `${TMUX_SESSION}:${windowName}`, 'remain-on-exit', 'on',
+  ], { stdio: 'ignore' });
+
+  // Poll for completion with elapsed time progress
   const startTime = Date.now();
   let timedOut = false;
+  let pollCount = 0;
 
   while (true) {
     try {
@@ -629,6 +654,13 @@ async function runCommandTmux(command, timeoutMs = 0, cwd = undefined) {
         await new Promise(r => kill.on('close', r));
       } catch { /* best effort */ }
       break;
+    }
+
+    // Progress indicator every 10 polls (~5 seconds)
+    pollCount++;
+    if (pollCount % 10 === 0) {
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      process.stderr.write(`  [tmux:${windowName}] running... ${elapsed}s elapsed\n`);
     }
 
     await sleep(TMUX_POLL_MS);
@@ -651,7 +683,8 @@ async function runCommandTmux(command, timeoutMs = 0, cwd = undefined) {
 
   await removeOptionalFile(scriptFile);
   await removeOptionalFile(outFile);
-  await removeOptionalFile(exitFile);
+  // Don't remove exitFile here — keep it for debugging if needed.
+  // It's in tmpdir and will be cleaned up by the OS.
 
   return {
     exitCode,
@@ -660,7 +693,36 @@ async function runCommandTmux(command, timeoutMs = 0, cwd = undefined) {
   };
 }
 
-async function runCommand(command, timeoutMs = 0, cwd = undefined) {
+function buildTmuxWindowName(meta, fallbackId) {
+  // Build a human-readable window name from dispatch metadata.
+  // meta may contain: agent, dedupe_key (format: "task_id:packet_id"), task_type
+  const parts = [];
+
+  if (meta.agent) {
+    parts.push(meta.agent);
+  }
+
+  if (meta.dedupe_key) {
+    // dedupe_key format: "sq_2026_0001:wp_2026_0001_01"
+    // Extract lane-relevant portion
+    const segments = meta.dedupe_key.split(':');
+    if (segments.length === 2) {
+      // Use packet_id which includes the lane step number
+      parts.push(segments[1]);
+    } else {
+      parts.push(meta.dedupe_key);
+    }
+  }
+
+  if (parts.length === 0) {
+    return `lane-${fallbackId}`;
+  }
+
+  // tmux window names can't contain periods or colons
+  return parts.join('-').replace(/[.:]/g, '_');
+}
+
+async function runCommand(command, timeoutMs = 0, cwd = undefined, _meta = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command[0], command.slice(1), {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -824,6 +886,7 @@ module.exports = {
   runCommand,
   runCommandTmux,
   ensureTmuxSession,
+  buildTmuxWindowName,
   shellQuote,
   normalizeError,
 };

@@ -2,7 +2,6 @@
 """Squirrel v1 entry point. Runs one full execution cycle.
 
 Usage:
-    python run.py                          # default handler (stub)
     python run.py --agent codex            # dispatch via codex-queue → codex
     python run.py --agent claude           # dispatch via codex-queue → claude
     python run.py --agent gemini           # dispatch via codex-queue → gemini
@@ -10,6 +9,7 @@ Usage:
 """
 
 import argparse
+import sys
 from squirrel.runner import run_once
 
 
@@ -18,8 +18,8 @@ def main():
     parser.add_argument(
         "--agent",
         choices=["codex", "claude", "gemini"],
-        default=None,
-        help="Route execution through codex-queue using this agent CLI.",
+        required=True,
+        help="Agent CLI to use for execution (required).",
     )
     parser.add_argument(
         "--dry-run",
@@ -39,17 +39,18 @@ def main():
     )
     args = parser.parse_args()
 
-    handler = None
-    if args.agent:
-        from squirrel.lane_codex_queue import create_handler
-        handler = create_handler(
+    from squirrel.lane_codex_queue import create_handler
+
+    def handler_factory(task):
+        return create_handler(
             agent=args.agent,
             dry_run=args.dry_run,
             timeout_ms=args.timeout,
             cwd=args.cwd,
+            task=task,
         )
 
-    run_once(handler=handler)
+    run_once(handler_factory=handler_factory, cwd=args.cwd)
 
 
 if __name__ == "__main__":

@@ -120,6 +120,9 @@ class TestEventsIntegration:
         from squirrel import INBOX, REGISTRY, OUTBOX, CONTROL
         from squirrel.runner import run_once
 
+        def _stub_handler(packet):
+            return {"success": True, "artifact": "", "notes": "stub"}
+
         # Clean
         for d in [INBOX, OUTBOX]:
             for f in d.glob("sq_9999_*.json"):
@@ -143,7 +146,7 @@ class TestEventsIntegration:
         (INBOX / "sq_9999_0001.json").write_text(json.dumps(task))
 
         clear_log()
-        run_once(cwd=str(tmp_path))
+        run_once(handler=_stub_handler, cwd=str(tmp_path))
 
         lines = read_log()
         event_types = [l.split("] ")[1].split(" ")[0] for l in lines]

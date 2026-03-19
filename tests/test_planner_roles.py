@@ -14,7 +14,7 @@ class TestInferRole:
         assert infer_role("Review the auth module", ["no security issues"]) == "reviewer"
 
     def test_operator(self):
-        assert infer_role("Deploy the staging build", []) == "operator"
+        assert infer_role("Deploy the staging environment", []) == "operator"
 
     def test_criteria_signal(self):
         assert infer_role("Do the thing", ["investigate root cause"]) == "researcher"

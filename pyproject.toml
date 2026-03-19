@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "squirrel"
-version = "1.0.0"
-description = "Squirrel v1 — deterministic task execution pipeline"
+version = "1.8.0"
+description = "Squirrel v1.8 — deterministic task execution pipeline"
 requires-python = ">=3.11"
 dependencies = ["jsonschema"]
 

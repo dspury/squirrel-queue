@@ -25,24 +25,52 @@ from squirrel.validation import parse_criterion
 # ── role inference ─────────────────────────────────────────────────
 
 # Keywords that signal a role. Checked against objective + criteria text.
+# Each role has keywords scored by strength: higher = stronger signal.
 _ROLE_SIGNALS = {
+    "builder": ["build", "create", "implement", "scaffold", "write", "add", "generate", "make", "develop"],
     "researcher": ["research", "investigate", "find out", "analyze", "survey", "explore", "look up", "report on"],
     "reviewer": ["review", "audit", "check", "verify", "inspect", "validate", "assess", "evaluate"],
     "operator": ["deploy", "migrate", "configure", "provision", "setup", "install", "run script", "execute"],
 }
 
+# Objective keywords are weighted 3x vs criteria keywords because the
+# objective is the primary intent signal. This prevents criteria like
+# "verify the build works" from overriding a builder objective.
+_OBJECTIVE_WEIGHT = 3
+_CRITERIA_WEIGHT = 1
+
 
 def infer_role(objective: str, criteria: list[str]) -> str:
     """Infer the sub-agent role from objective and criteria text.
 
-    Falls back to 'builder' (the default worker role) if no strong
-    signal is detected. This is intentionally conservative — most
-    tasks are build tasks.
+    Uses weighted keyword scoring: objective matches count 3x more than
+    criteria matches. If multiple roles tie, falls back to 'builder'.
+    Falls back to 'builder' if no keywords match at all.
     """
-    text = (objective + " " + " ".join(criteria)).lower()
+    obj_lower = objective.lower()
+    crit_lower = " ".join(criteria).lower()
+
+    scores = {}
     for role, keywords in _ROLE_SIGNALS.items():
-        if any(kw in text for kw in keywords):
-            return role
+        score = 0
+        for kw in keywords:
+            if kw in obj_lower:
+                score += _OBJECTIVE_WEIGHT
+            if kw in crit_lower:
+                score += _CRITERIA_WEIGHT
+        if score > 0:
+            scores[role] = score
+
+    if not scores:
+        return "builder"
+
+    # Return highest-scoring role. On tie, builder wins implicitly
+    # because it's the fallback and ties indicate ambiguity.
+    best_score = max(scores.values())
+    winners = [r for r, s in scores.items() if s == best_score]
+    if len(winners) == 1:
+        return winners[0]
+    # Tie: ambiguous signal, default to builder
     return "builder"
 
 
@@ -64,6 +92,7 @@ def decompose(task: dict) -> list[dict]:
     context_files = task.get("context_files", [])
     constraints = task.get("constraints", [])
     priority = task.get("priority", "normal")
+    role_override = task.get("role")  # Explicit role from submit --role
 
     if not criteria:
         criteria = ["Objective completed as described"]
@@ -78,7 +107,7 @@ def decompose(task: dict) -> list[dict]:
 
     if len(groups) == 1:
         # Single packet — one agent does everything
-        return [_make_packet(
+        packets = [_make_packet(
             task_id=task_id,
             step=1,
             objective=objective,
@@ -86,26 +115,35 @@ def decompose(task: dict) -> list[dict]:
             context_files=context_files,
             constraints=constraints,
             priority=priority,
+            role_override=role_override,
         )]
+    else:
+        # Multiple packets — independent work streams
+        packets = []
+        for i, group in enumerate(groups, start=1):
+            packets.append(_make_packet(
+                task_id=task_id,
+                step=i,
+                objective=objective,
+                criteria=group,
+                context_files=context_files,
+                constraints=constraints,
+                priority=priority,
+                role_override=role_override,
+            ))
 
-    # Multiple packets — independent work streams
-    packets = []
-    for i, group in enumerate(groups, start=1):
-        packets.append(_make_packet(
-            task_id=task_id,
-            step=i,
-            objective=objective,
-            criteria=group,
-            context_files=context_files,
-            constraints=constraints,
-            priority=priority,
-        ))
+    # Warn when a single packet has many criteria — may benefit from splitting
+    if len(packets) == 1 and len(criteria) >= 5:
+        print(f"  NOTE: Single packet with {len(criteria)} criteria. Consider splitting "
+              f"into independent tasks for parallel execution.")
+
     return packets
 
 
-def _make_packet(task_id, step, objective, criteria, context_files, constraints, priority="normal"):
+def _make_packet(task_id, step, objective, criteria, context_files, constraints,
+                 priority="normal", role_override=None):
     step_num = f"{step:02d}"
-    role = infer_role(objective, criteria)
+    role = role_override if role_override else infer_role(objective, criteria)
     return {
         "packet_id": f"wp_{task_id.split('_', 1)[1]}_{step_num}",
         "task_id": task_id,

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Squirrel v1.5 CLI — operator interface for the execution pipeline.
+"""Squirrel v1.8 CLI — operator interface for the execution pipeline.
 
 Usage:
     squirrel submit "objective" --criteria "..." [--priority high] [--constraint "..."]
     squirrel status [task_id]
-    squirrel run [--agent claude] [--dry-run]
+    squirrel run --agent claude [--dry-run]
     squirrel watch [--tail N]
     squirrel lanes
     squirrel events [--tail N]
+    squirrel history
     squirrel task <task_id>
     squirrel retry <task_id>
     squirrel cancel <task_id>
@@ -16,12 +17,65 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from squirrel import INBOX, REGISTRY, OUTBOX, CONTROL, LANES
+
+VERSION = "1.8.0"
+
+
+# ── ANSI color helpers ────────────────────────────────────────────
+
+def _supports_color() -> bool:
+    """Check if stdout supports ANSI color."""
+    if os.environ.get("NO_COLOR"):
+        return False
+    if not hasattr(sys.stdout, "isatty"):
+        return False
+    return sys.stdout.isatty()
+
+_COLOR = _supports_color()
+
+def _c(code: str, text: str) -> str:
+    """Wrap text in ANSI color code if supported."""
+    if not _COLOR:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+def _bold(text: str) -> str:
+    return _c("1", text)
+
+def _green(text: str) -> str:
+    return _c("32", text)
+
+def _red(text: str) -> str:
+    return _c("31", text)
+
+def _yellow(text: str) -> str:
+    return _c("33", text)
+
+def _blue(text: str) -> str:
+    return _c("34", text)
+
+def _dim(text: str) -> str:
+    return _c("2", text)
+
+def _status_color(status: str) -> str:
+    """Colorize a status string."""
+    s = status.lower()
+    if s == "complete":
+        return _green(status)
+    if s == "failed":
+        return _red(status)
+    if s in ("blocked", "active", "validating"):
+        return _yellow(status)
+    if s == "queued":
+        return _blue(status)
+    return status
 
 
 def _next_task_id() -> str:
@@ -80,6 +134,19 @@ def cmd_submit(args):
     objective = args.objective if args.objective else _read_multiline()
 
     task_id = _next_task_id()
+    criteria = args.criteria or []
+    if not criteria:
+        print("WARNING: No --criteria provided. Tasks without verifiable criteria")
+        print("         will fail validation. Add criteria like:")
+        print('         --criteria "main.py file exists"')
+        print('         --criteria "tests pass :: python -m pytest"')
+        print()
+        resp = input("Submit anyway with no criteria? [y/N] ").strip().lower()
+        if resp != "y":
+            print("Aborted. Re-submit with --criteria.")
+            sys.exit(1)
+        criteria = ["Objective completed as described"]
+
     task = {
         "task_id": task_id,
         "title": objective.split("\n", 1)[0].strip()[:80],
@@ -90,9 +157,11 @@ def cmd_submit(args):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": "queued",
         "constraints": args.constraint or [],
-        "success_criteria": args.criteria or ["Objective completed as described"],
+        "success_criteria": criteria,
         "context_files": args.context or [],
     }
+    if args.role:
+        task["role"] = args.role
 
     dest = INBOX / f"{task_id}.json"
     with open(dest, "w") as f:
@@ -144,20 +213,20 @@ def cmd_status(args):
             print("No tasks.")
             return
 
-        print(f"{'ID':<18} {'STATUS':<12} {'PRIORITY':<10} {'TITLE'}")
-        print("-" * 70)
+        print(_bold(f"{'ID':<18} {'STATUS':<12} {'PRIORITY':<10} {'TITLE'}"))
+        print(_dim("-" * 70))
         for location, task in tasks:
             tid = task.get("task_id", "?")
             status = task.get("status", "?")
             priority = task.get("priority", "?")
             title = task.get("title", "?")[:35]
-            print(f"{tid:<18} {status:<12} {priority:<10} {title}")
+            print(f"{tid:<18} {_status_color(f'{status:<12}')} {priority:<10} {title}")
 
 
 def _print_task_detail(task):
-    print(f"  ID:          {task.get('task_id')}")
+    print(f"  ID:          {_bold(task.get('task_id', '?'))}")
     print(f"  Title:       {task.get('title')}")
-    print(f"  Status:      {task.get('status')}")
+    print(f"  Status:      {_status_color(task.get('status', '?'))}")
     print(f"  Priority:    {task.get('priority')}")
     print(f"  Objective:   {task.get('objective')}")
     print(f"  Created:     {task.get('created_at')}")
@@ -179,35 +248,45 @@ def _print_task_detail(task):
 def cmd_run(args):
     from squirrel.runner import run_once
 
-    handler = None
-    handler_factory = None
+    # Fall back to SQUIRREL_AGENT env var if --agent not provided
+    if not args.agent:
+        env_agent = os.environ.get("SQUIRREL_AGENT", "").lower()
+        if env_agent in ("codex", "claude", "gemini"):
+            args.agent = env_agent
+        else:
+            print("ERROR: --agent is required (or set SQUIRREL_AGENT env var).")
+            print("  squirrel run --agent claude")
+            print("  squirrel run --agent codex")
+            print("  squirrel run --agent gemini")
+            print("  export SQUIRREL_AGENT=claude  # set default")
+            sys.exit(1)
 
-    if args.agent:
-        from squirrel.lane_codex_queue import create_handler
+    from squirrel.lane_codex_queue import create_handler
 
-        def handler_factory(task):
-            return create_handler(
-                agent=args.agent,
-                dry_run=args.dry_run,
-                timeout_ms=args.timeout,
-                cwd=args.cwd,
-                task=task,
-                tmux=args.tmux,
-            )
+    def handler_factory(task):
+        return create_handler(
+            agent=args.agent,
+            dry_run=args.dry_run,
+            timeout_ms=args.timeout,
+            cwd=args.cwd,
+            task=task,
+            tmux=args.tmux,
+        )
 
     if args.tmux and not args.agent:
         print("WARNING: --tmux has no effect without --agent.")
 
     if args.tmux and args.agent:
+        import shutil
+        if not shutil.which("tmux"):
+            print("ERROR: --tmux requires tmux but it is not installed.")
+            print("  Install with: brew install tmux (macOS) or apt install tmux (Linux)")
+            sys.exit(1)
         import subprocess as _sp
-        # Ensure the tmux session exists
         _sp.run(["tmux", "new-session", "-d", "-s", "squirrel-lanes"], capture_output=True)
-        # Open a new Terminal.app window attached to it
-        _sp.run(["osascript", "-e",
-                 'tell application "Terminal" to do script "tmux attach -t squirrel-lanes"'],
-                capture_output=True)
+        print("tmux session 'squirrel-lanes' ready. Attach with: tmux attach -t squirrel-lanes")
 
-    run_once(handler=handler, handler_factory=handler_factory, cwd=args.cwd)
+    run_once(handler_factory=handler_factory, cwd=args.cwd)
 
 
 # ── watch ──────────────────────────────────────────────────────────
@@ -221,9 +300,9 @@ def cmd_watch(args):
         while True:
             # Clear screen
             print("\033[2J\033[H", end="")
-            print("=" * 60)
-            print("  SQUIRREL — Live System State")
-            print("=" * 60)
+            print(_bold("=" * 60))
+            print(_bold("  SQUIRREL — Live System State"))
+            print(_bold("=" * 60))
 
             # Commander state
             commander = events.read_commander()
@@ -282,8 +361,8 @@ def cmd_lanes(args):
         print("No active lanes.")
         return
 
-    print(f"{'LANE':<12} {'ROLE':<12} {'STATUS':<10} {'TASK':<18} {'PACKET':<22} {'ACTION'}")
-    print("-" * 90)
+    print(_bold(f"{'LANE':<12} {'ROLE':<12} {'STATUS':<10} {'TASK':<18} {'PACKET':<22} {'ACTION'}"))
+    print(_dim("-" * 90))
     for lane in all_lanes:
         lid = lane.get("lane_id", "?")
         role = lane.get("role", "?")
@@ -291,7 +370,7 @@ def cmd_lanes(args):
         tid = lane.get("task_id", "")
         pid = lane.get("packet_id", "")
         action = lane.get("current_action", "")[:25]
-        print(f"{lid:<12} {role:<12} {status:<10} {tid:<18} {pid:<22} {action}")
+        print(f"{lid:<12} {role:<12} {_status_color(f'{status:<10}')} {tid:<18} {pid:<22} {action}")
 
     if args.verbose:
         for lane in all_lanes:
@@ -306,19 +385,35 @@ def cmd_lanes(args):
 def cmd_events(args):
     """Show the event log."""
     from squirrel import events
+    from squirrel.events import _LOG_PATH
 
     tail = args.tail or 0
 
     if args.follow:
-        # Tail -f mode
-        last_count = 0
+        # Tail -f mode using file position tracking (not re-reading entire log)
+        # Show existing events first
+        lines = events.read_log(tail=tail if tail > 0 else 0)
+        for line in lines:
+            print(line)
+
         try:
+            pos = _LOG_PATH.stat().st_size if _LOG_PATH.exists() else 0
             while True:
-                lines = events.read_log()
-                if len(lines) > last_count:
-                    for line in lines[last_count:]:
-                        print(line)
-                    last_count = len(lines)
+                if not _LOG_PATH.exists():
+                    time.sleep(1)
+                    continue
+                size = _LOG_PATH.stat().st_size
+                if size > pos:
+                    with open(_LOG_PATH) as f:
+                        f.seek(pos)
+                        new_data = f.read()
+                        for line in new_data.splitlines():
+                            if line.strip():
+                                print(line)
+                    pos = size
+                elif size < pos:
+                    # Log was truncated/rotated — reset
+                    pos = 0
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\nStopped.")
@@ -480,6 +575,51 @@ def cmd_cancel(args):
     print(f"Cancelled: {args.task_id}")
 
 
+# ── history ────────────────────────────────────────────────────────
+
+def cmd_history(args):
+    """Show completed/failed task receipts."""
+    receipt_files = sorted(OUTBOX.glob("*_receipt.json"))
+    if not receipt_files:
+        print("No receipts found.")
+        return
+
+    print(_bold(f"{'TASK':<18} {'STATUS':<12} {'VALIDATION':<12} {'ARTIFACTS':<6} {'COMPLETED'}"))
+    print(_dim("-" * 72))
+    for rf in receipt_files:
+        try:
+            receipt = _load_json(rf)
+        except (json.JSONDecodeError, OSError):
+            continue
+        tid = receipt.get("task_id", "?")
+        status = receipt.get("status", "?")
+        val = receipt.get("validation_result", "?")
+        n_art = len(receipt.get("artifacts", []))
+        completed = receipt.get("completed_at", "?")
+        # Shorten ISO timestamp for display
+        if completed and len(completed) > 19:
+            completed = completed[:19]
+
+        val_colored = _green(f"{val:<12}") if val == "pass" else _red(f"{val:<12}")
+        print(f"{tid:<18} {_status_color(f'{status:<12}')} {val_colored} {n_art:<6} {completed}")
+
+    if args.verbose:
+        print()
+        for rf in receipt_files:
+            try:
+                receipt = _load_json(rf)
+            except (json.JSONDecodeError, OSError):
+                continue
+            tid = receipt.get("task_id", "?")
+            notes = receipt.get("validation_notes", "")
+            if notes:
+                print(f"  {_bold(tid)}: {notes}")
+            errors = receipt.get("errors", [])
+            for e in errors:
+                if e:
+                    print(f"  {_bold(tid)}: {_red('error')}: {e}")
+
+
 # ── purge ──────────────────────────────────────────────────────────
 
 def cmd_purge(args):
@@ -492,11 +632,25 @@ def cmd_purge(args):
     else:
         targets = [dirs[args.target]]
 
-    count = 0
+    # Count files before deleting
+    count = sum(1 for d in targets for _ in d.glob("*.json"))
+
+    if count == 0 and args.target != "all":
+        print("Nothing to purge.")
+        return
+
+    # Require confirmation unless --yes
+    if not args.yes:
+        extra = " and runtime state" if args.target == "all" else ""
+        print(f"This will delete {count} file(s){extra} from {args.target}.")
+        resp = input("Continue? [y/N] ").strip().lower()
+        if resp != "y":
+            print("Aborted.")
+            return
+
     for d in targets:
         for f in d.glob("*.json"):
             f.unlink()
-            count += 1
 
     # Also clear runtime state and lock on full purge
     if args.target == "all":
@@ -519,8 +673,9 @@ def cmd_purge(args):
 def main():
     parser = argparse.ArgumentParser(
         prog="squirrel",
-        description="Squirrel v1.5 — task execution pipeline",
+        description="Squirrel v1.8 — task execution pipeline",
     )
+    parser.add_argument("--version", action="version", version=f"squirrel {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # submit
@@ -531,6 +686,8 @@ def main():
     p_submit.add_argument("--criteria", action="append", help="Success criterion (repeatable, optional)")
     p_submit.add_argument("--constraint", action="append", help="Constraint (repeatable)")
     p_submit.add_argument("--context", action="append", help="Context file path (repeatable)")
+    p_submit.add_argument("--role", choices=["builder", "researcher", "reviewer", "operator"],
+                          default=None, help="Override auto-inferred agent role")
     p_submit.set_defaults(func=cmd_submit)
 
     # status
@@ -580,11 +737,17 @@ def main():
     p_cancel.add_argument("task_id", help="Task ID to cancel")
     p_cancel.set_defaults(func=cmd_cancel)
 
+    # history
+    p_history = sub.add_parser("history", help="Show past task receipts")
+    p_history.add_argument("-v", "--verbose", action="store_true", help="Show notes and errors")
+    p_history.set_defaults(func=cmd_history)
+
     # purge
     p_purge = sub.add_parser("purge", help="Clear task files from the pipeline")
     p_purge.add_argument("target", nargs="?", default="all",
                          choices=["all", "inbox", "registry", "outbox", "lanes"],
                          help="What to purge (default: all)")
+    p_purge.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     p_purge.set_defaults(func=cmd_purge)
 
     args = parser.parse_args()

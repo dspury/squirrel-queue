@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 
 import pytest
-from squirrel.lanes import dispatch, check_context_files, BlockedError
+from squirrel.lanes import dispatch, check_context_files, BlockedError, NoHandlerError
+
+
+def _stub_handler(p):
+    return {"success": True, "artifact": "", "notes": "stub executed"}
 
 
 class TestCheckContextFiles:
@@ -32,10 +36,9 @@ class TestDispatch:
             "status": "queued",
         }
 
-    def test_default_handler_succeeds(self, tmp_path):
-        result = dispatch(self._packet(), cwd=tmp_path)
-        assert result["success"]
-        assert result["packet_id"] == "wp_2026_0001_01"
+    def test_no_handler_raises(self, tmp_path):
+        with pytest.raises(NoHandlerError):
+            dispatch(self._packet(), cwd=tmp_path)
 
     def test_custom_handler(self, tmp_path):
         def handler(p):
@@ -57,13 +60,13 @@ class TestDispatch:
         packet = self._packet()
         packet["context_files"] = ["nonexistent.py"]
         with pytest.raises(BlockedError) as exc_info:
-            dispatch(packet, cwd=tmp_path)
+            dispatch(packet, handler=_stub_handler, cwd=tmp_path)
         assert "nonexistent.py" in str(exc_info.value)
 
     def test_lane_file_written(self, tmp_path):
         from squirrel import LANES
         LANES.mkdir(parents=True, exist_ok=True)
-        result = dispatch(self._packet(), cwd=tmp_path)
+        result = dispatch(self._packet(), handler=_stub_handler, cwd=tmp_path)
         lane_file = LANES / "wp_2026_0001_01.json"
         assert lane_file.exists()
         data = json.loads(lane_file.read_text())

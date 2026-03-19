@@ -16,6 +16,7 @@ Usage:
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from squirrel import CONFIG
@@ -49,36 +50,83 @@ def _read_config_file(name: str) -> str:
     return ""
 
 
+# Maximum bytes of context file content to inject into the prompt.
+# The codex-queue hard limit is 16,000 chars for the full prompt.
+# Reserve ~4KB for system framing, objective, criteria, and constraints.
+CONTEXT_BUDGET_BYTES = 12000
+
+# Role-aware prefix lines. These replace the codex-queue DEFAULT_PREFIX_LINE
+# so the agent gets task-appropriate framing instead of a blanket constraint.
+_ROLE_PREFIX = {
+    "builder": "You are a Squirrel worker agent. Produce working code artifacts that satisfy the objective. Make the smallest production-credible change.",
+    "researcher": "You are a Squirrel research agent. Investigate the topic and produce a structured, factual report. Cite sources where possible.",
+    "reviewer": "You are a Squirrel review agent. Audit the code or artifact and identify issues, risks, and improvements. Be specific and actionable.",
+    "operator": "You are a Squirrel operations agent. Execute the deployment, migration, or configuration task precisely. Verify each step before proceeding.",
+}
+
+_SYSTEM_FRAMING = (
+    "You are executing a work packet dispatched by the Squirrel task pipeline. "
+    "Your output will be programmatically validated against the success criteria listed below. "
+    "Focus on producing artifacts (files, diffs, reports) — not conversation. "
+    "Do not explain what you plan to do; just do it."
+)
+
+
 def _assemble_prompt(packet: dict, cwd: str = None) -> str:
     """Build the full prompt sent to the agent.
 
-    The agent receives only what it needs to do the work:
-      1. Context files (injected content)
-      2. Constraints
-      3. Objective
-      4. Success criteria (so the agent knows what will be verified)
-      5. Expected artifact (if any)
-
-    ROLE.md and CONSTITUTION.md are Squirrel system docs — they are
-    NOT injected into agent prompts. The agent is a worker, not the
-    Commander.
+    Structure:
+      1. System framing (who you are, how output is validated)
+      2. Role-specific prefix
+      3. Context files (with size guard)
+      4. Constraints
+      5. Objective
+      6. Success criteria
+      7. Expected artifact (if any)
     """
+    role = packet.get("role", "builder")
     parts = []
 
-    # Inject context files
+    # 1. System framing
+    parts.append(_SYSTEM_FRAMING)
+
+    # 2. Role-specific prefix
+    prefix = _ROLE_PREFIX.get(role, _ROLE_PREFIX["builder"])
+    parts.append(prefix)
+
+    # 3. Inject context files with size guard
+    context_bytes_used = 0
+    skipped_files = []
     for filepath in packet.get("context_files", []):
         resolve_from = Path(cwd) if cwd else _PROJECT_ROOT
         p = resolve_from / filepath
         if p.exists():
-            content = p.read_text().strip()
+            try:
+                content = p.read_text().strip()
+            except (OSError, UnicodeDecodeError):
+                skipped_files.append(f"{filepath} (unreadable)")
+                continue
+            content_size = len(content.encode("utf-8"))
+            if context_bytes_used + content_size > CONTEXT_BUDGET_BYTES:
+                skipped_files.append(f"{filepath} ({content_size:,}B, over budget)")
+                continue
+            context_bytes_used += content_size
             parts.append(f"--- File: {filepath} ---\n{content}")
 
+    if skipped_files:
+        parts.append(
+            f"Note: {len(skipped_files)} context file(s) skipped due to size limits: "
+            + ", ".join(skipped_files)
+        )
+
+    # 4. Constraints
     for constraint in packet.get("constraints", []):
         parts.append(f"Constraint: {constraint}")
 
+    # 5. Objective
     parts.append(f"Objective:\n{packet['objective']}")
 
-    # Include success criteria so the agent knows what will be checked
+    # 6. Success criteria
     criteria = packet.get("criteria", [])
     if criteria:
         criteria_block = "\n".join(f"  - {c}" for c in criteria)
@@ -88,12 +136,16 @@ def _assemble_prompt(packet: dict, cwd: str = None) -> str:
         if criterion and criterion != "Objective completed as described":
             parts.append(f"Success criterion for this step: {criterion}")
 
+    # 7. Expected artifact
     artifact = packet.get("expected_artifact")
     if artifact:
         parts.append(f"Expected output: {artifact}")
 
     prompt = "\n\n".join(parts)
     return prompt
+
+
+_PRIORITY_MAP = {"critical": "urgent", "high": "high", "normal": "normal", "low": "low"}
 
 
 def build_request(
@@ -105,6 +157,9 @@ def build_request(
     cwd: str = None,
 ) -> dict:
     """Translate a Squirrel work packet + parent task into a codex-queue request."""
+    raw_priority = task.get("priority", "normal")
+    cq_priority = _PRIORITY_MAP.get(raw_priority, "normal")
+
     request = {
         "schema": "codex-queue-request@v1",
         "task_type": task.get("title", "squirrel-lane-task")[:80],
@@ -112,7 +167,7 @@ def build_request(
         "prompt": _assemble_prompt(packet, cwd=cwd),
         "execution_mode": execution_mode,
         "return_contract": "squirrel-lane-result",
-        "priority": task.get("priority", "normal"),
+        "priority": cq_priority,
         "origin": "squirrel",
         "agent": agent,
     }
@@ -132,6 +187,9 @@ def dispatch_via_codex_queue(
 ) -> dict:
     """Shell out to codex-queue and parse the result JSON."""
     cmd = [CODEX_QUEUE_BIN, "--payload", json.dumps(request)]
+    # Disable codex-queue's default prefix line — Squirrel bakes role-aware
+    # framing directly into the prompt via _assemble_prompt().
+    cmd.extend(["--prefix-line", ""])
     if cwd:
         cmd.extend(["--cwd", str(cwd)])
     if dry_run:
@@ -213,6 +271,16 @@ def create_handler(
             timeout_ms=timeout_ms,
             cwd=cwd,
         )
+
+        # On dry-run, print the full assembled prompt for operator inspection.
+        if dry_run:
+            prompt_text = request.get("prompt", "")
+            print(f"\n{'─' * 60}")
+            print(f"PROMPT PREVIEW ({len(prompt_text)} chars) — {packet.get('packet_id', '?')}")
+            print(f"{'─' * 60}")
+            print(prompt_text)
+            print(f"{'─' * 60}\n")
+
         result = dispatch_via_codex_queue(request, cwd=cwd, dry_run=dry_run, tmux=tmux)
 
         return {

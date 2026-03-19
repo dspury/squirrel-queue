@@ -173,7 +173,7 @@ def _check_content_criterion(criterion: str, cwd: Path) -> tuple[bool, str]:
 
     candidates = []
     for p in cwd.iterdir():
-        if p.is_file() and p.name.startswith("."):
+        if p.is_file() and not p.name.startswith("."):
             candidates.append(p)
     for item in items:
         p = cwd / item

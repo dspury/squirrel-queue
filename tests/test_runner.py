@@ -7,6 +7,10 @@ from squirrel import INBOX, REGISTRY, OUTBOX, CONTROL, ensure_workspace
 from squirrel.runner import run_once, _check_control, _make_crash_receipt
 
 
+def _stub_handler(packet):
+    return {"success": True, "artifact": "", "notes": "stub executed"}
+
+
 @pytest.fixture(autouse=True)
 def clean_workspace():
     ensure_workspace()
@@ -107,20 +111,20 @@ class TestRunOnce:
     def test_processes_task(self, tmp_path):
         (tmp_path / "test.txt").write_text("x")
         _submit_task(criteria=["test.txt file exists"])
-        result = run_once(cwd=str(tmp_path))
+        result = run_once(handler=_stub_handler, cwd=str(tmp_path))
         assert len(result) == 1
         assert result[0]["task_id"] == "sq_9999_0001"
         assert result[0]["validation_result"] == "pass"
 
     def test_unverifiable_fails(self):
         _submit_task(criteria=["The vibes are good"])
-        result = run_once()
+        result = run_once(handler=_stub_handler)
         assert len(result) == 1
         assert result[0]["validation_result"] == "fail"
 
     def test_receipt_always_written(self):
         _submit_task()
-        run_once()
+        run_once(handler=_stub_handler)
         assert (OUTBOX / "sq_9999_0001_receipt.json").exists()
 
     def test_retry_signal_requeues_failed_task(self, tmp_path):
@@ -128,7 +132,7 @@ class TestRunOnce:
         (tmp_path / "test.txt").write_text("x")
         # First run: task fails because criterion is unverifiable
         _submit_task(criteria=["The vibes are good"])
-        run_once()
+        run_once(handler=_stub_handler)
         # Verify it failed
         task_data = json.loads((REGISTRY / "sq_9999_0001.json").read_text())
         assert task_data["status"] == "failed"
@@ -136,7 +140,7 @@ class TestRunOnce:
         sig = {"action": "retry", "task_id": "sq_9999_0001"}
         (CONTROL / "retry_sq_9999_0001.json").write_text(json.dumps(sig))
         # Second run: retry signal re-queues, task fails again but proves re-queue worked
-        run_once()
+        run_once(handler=_stub_handler)
         task_data = json.loads((REGISTRY / "sq_9999_0001.json").read_text())
         assert task_data.get("retry_count") == 1
 
@@ -161,7 +165,7 @@ class TestRunOnce:
         # Submit low first so it'd be processed first by filename sort
         (INBOX / "sq_9999_0002.json").write_text(json.dumps(low))
         (INBOX / "sq_9999_0001.json").write_text(json.dumps(critical))
-        results = run_once(cwd=str(tmp_path))
+        results = run_once(handler=_stub_handler, cwd=str(tmp_path))
         assert len(results) == 2
         # Critical should be processed first
         assert results[0]["task_id"] == "sq_9999_0001"

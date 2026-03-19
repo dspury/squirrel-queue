@@ -34,18 +34,15 @@ class BlockedError(Exception):
         super().__init__(f"Missing context files: {', '.join(missing)}")
 
 
-def _default_handler(packet: dict) -> dict:
-    """Default v1 handler. Checks if expected artifacts exist.
-    For the proof-of-loop, this validates that the system's own
-    schema files satisfy the criteria."""
-    objective = packet.get("objective", "")
-    artifact = packet.get("expected_artifact", "")
+class NoHandlerError(Exception):
+    """Raised when dispatch is called without a handler configured."""
 
-    return {
-        "success": True,
-        "artifact": artifact,
-        "notes": f"Executed: {objective}",
-    }
+    def __init__(self):
+        super().__init__(
+            "No agent handler configured. Use --agent to specify an agent "
+            "(e.g. squirrel run --agent claude). Running without an agent "
+            "produces no real work."
+        )
 
 
 def check_context_files(packet: dict, cwd: Path = None) -> list[str]:
@@ -76,7 +73,7 @@ def dispatch(packet: dict, handler: LaneHandler = None, cwd: Path = None) -> dic
     Returns the lane run result.
     """
     if handler is None:
-        handler = _default_handler
+        raise NoHandlerError()
 
     # Pre-flight: verify role and context files
     validate_role(packet)
